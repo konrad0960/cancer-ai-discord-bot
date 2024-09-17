@@ -22,7 +22,7 @@ import asyncio
 import wandb
 
 from discord.ext import commands
-
+\
 from .config import load_config, setup_logger
 from .competition_config import CompetitionConfigManager, CompetitionConfig
 
@@ -106,9 +106,8 @@ class DiscordBot(commands.Bot):
             self.logger.info(f"Competition {competition.competition_id} already announced")
             return None
         
-        print("latest comp: ", latest_executed_competition, "latest announcement: ", latest_executed_announcement, "threashold: ", announcement_threshold)
         filters = {
-        "Created": {
+        "created_at": {
             "$gte": latest_executed_competition.isoformat(),
             "$lt": announcement_threshold.isoformat()
             }
@@ -121,7 +120,6 @@ class DiscordBot(commands.Bot):
         
         tested_models_amount = 0
         validators_choices = []
-        created_at: datetime
         for run in runs:
             for key, value in run.summary.items():
                 # TODO: refactor to cases?
@@ -130,8 +128,6 @@ class DiscordBot(commands.Bot):
                     continue
                 if key == "winning_hotkey":
                     validators_choices.append(value)
-                if key == "Created":
-                    created_at = value
 
         validators_choices_counter = Counter(validators_choices)
         if not validators_choices_counter:
@@ -139,20 +135,29 @@ class DiscordBot(commands.Bot):
             return None
         
         winning_hotkey = validators_choices_counter.most_common(1)[0][0]
-        run = self.wandb_api.runs(f"{entity}/{project}", filters={"Created": {"$gte": (created_at - timedelta(minutes=15)).isoformat(),
-                                                                                  "$lt": (created_at + timedelta(minutes=15)).isoformat()},
-                                                                                    "miner_hotkey": winning_hotkey})[0]
-        
+
+        # getting the winner miner hotkey run
+        winner_run: wandb.apis.public.Run
+        for run in runs:
+            for key, value in run.summary.items():
+                if key == "miner_hotkey" and value == winning_hotkey:
+                    winner_run = run
+                    break
+                    
+        if winner_run is None:
+            self.logger.error(f"No winner run found for competition {competition.competition_id}")
+            return None
+
         dataset_size: int
         score: float
-        for key, value in run.summary.items():
+        for key, value in winner_run.summary.items():
             # TODO: refactor to cases?
             if key == "tested_entries":
                 dataset_size = value
             if key == "score":
                 score = value
         
-        # self.last_competitions_announcements[competition.competition_id] = latest_executed_competition
+        self.last_competitions_announcements[competition.competition_id] = latest_executed_competition
 
         announcement_data = DiscordAnnouncementData(competition_id=competition.competition_id,
                                         competition_date=latest_executed_competition,
@@ -162,14 +167,15 @@ class DiscordBot(commands.Bot):
                                                 score=score)
         return announcement_data
 
-    # TODO: refactor to meet the requirements
     async def create_discord_message(self, announcement_data: DiscordAnnouncementData) -> str:
-        message = f"Competition {announcement_data.competition_id} has finished.\n"
-        message += f"Date: {announcement_data.competition_date}\n"
-        message += f"Dataset size: {announcement_data.dataset_size}\n"
-        message += f"Tested models amount: {announcement_data.tested_models_amount}\n"
-        message += f"Winning hotkey: {announcement_data.winning_hotkey}\n"
-        message += f"Score: {announcement_data.score}\n"
+        message = (
+            f"# Competition results\n\n"
+            f"**{announcement_data.competition_id}**  - `{announcement_data.competition_date.strftime('%Y.%m.%d %H:%M UTC')}`\n"
+            f"Dataset size: {announcement_data.dataset_size}\n\n"
+            f"Tested models - {announcement_data.tested_models_amount}\n\n"
+            f"Winning hotkey - {announcement_data.winning_hotkey}\n\n"
+            f"Score: **{announcement_data.score:.2f}**"
+        )
         return message
 
     async def announce_competition_results(self, competition: CompetitionConfig) -> None:
@@ -177,8 +183,7 @@ class DiscordBot(commands.Bot):
         if announcement_data is None:
             return
         message = await self.create_discord_message(announcement_data)
-        print(message)
-        # await self.send_message_to_channel("competition-announcements", message)
+        await self.send_message_to_channel("discord-bot-test", message)
 
     async def get_latest_executed_competition(self, competition_schedule: list[str]) -> datetime:
         # Convert time strings to datetime objects
