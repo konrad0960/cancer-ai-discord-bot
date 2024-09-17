@@ -1,0 +1,4 @@
+TEST CASES:
+- The bot is fetching configuration from remote repo -
+- The bot is fetching table data from wandb
+- The bot sends message to a channel
